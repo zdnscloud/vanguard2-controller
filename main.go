@@ -14,6 +14,8 @@ func main() {
 	flag.StringVar(&serviceIPRange, "service-ip-range", "", "service ip range")
 	flag.StringVar(&podIPRange, "pod-ip-range", "", "pod ip range")
 	flag.StringVar(&serverAddress, "dns-server", "", "k8s dns service address")
+	flag.Parse()
+
 	client, err := controller.NewVgClient(grpcServer, clustDomain, serviceIPRange, podIPRange, serverAddress)
 	if err != nil {
 		log.Fatalf("create vg client failed:%s", err.Error())
