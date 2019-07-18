@@ -70,9 +70,11 @@ func NewK8sController(client *VgClient) (*Controller, error) {
 		client:     client,
 		stopCh:     stopCh,
 	}
-	go controller.Start(stopCh, c, predicate.NewIgnoreUnchangedUpdate())
-
 	return c, nil
+}
+
+func (c *Controller) Run() {
+	c.controller.Start(c.stopCh, c, predicate.NewIgnoreUnchangedUpdate())
 }
 
 func (c *Controller) OnCreate(e event.CreateEvent) (handler.Result, error) {
@@ -229,11 +231,11 @@ func (c *Controller) addPodRecord(svc *corev1.Service, o *corev1.Endpoints) {
 						Ttl:    DefaultTTL,
 						Rdatas: []g53.Rdata{&g53.PTR{Name: n}},
 					}
-					c.client.replacePodReverseRRset(rn, g53.RR_PTR, ptr)
+					c.client.replacePodReverseRRset(ptr)
 				}
 			}
 			a.Rdatas = rdatas
-			c.client.replaceServiceRRset(n, g53.RR_A, a)
+			c.client.replaceServiceRRset(a)
 		}
 
 		for _, port := range subset.Ports {
@@ -267,7 +269,7 @@ func (c *Controller) addPodRecord(svc *corev1.Service, o *corev1.Endpoints) {
 				})
 			}
 			srv.Rdatas = rdatas
-			c.client.replaceServiceRRset(n, g53.RR_SRV, srv)
+			c.client.replaceServiceRRset(srv)
 		}
 	}
 }
@@ -276,16 +278,16 @@ func (c *Controller) deletePodRecord(o *corev1.Endpoints) {
 	for _, subset := range o.Subsets {
 		for _, addr := range subset.Addresses {
 			n := c.client.getEndpointsAddrName(&addr, o.Name, o.Namespace)
-			c.client.replaceServiceRRset(n, g53.RR_A, nil)
+			c.client.deleteServiceRRset(n, g53.RR_A)
 			if rn, err := util.ReverseIPName(addr.IP); err == nil {
-				c.client.replacePodReverseRRset(rn, g53.RR_PTR, nil)
+				c.client.deletePodReverseRRset(rn)
 			}
 		}
 
 		for _, port := range subset.Ports {
 			if port.Name != "" {
 				n := c.client.getPortName(port.Name, string(port.Protocol), o.Name, o.Namespace)
-				c.client.replaceServiceRRset(n, g53.RR_SRV, nil)
+				c.client.deleteServiceRRset(n, g53.RR_SRV)
 			}
 		}
 	}
@@ -311,7 +313,7 @@ func (c *Controller) addHeadlessServiceRecord(svc *corev1.Service, ep *corev1.En
 			Ttl:    DefaultTTL,
 			Rdatas: rdatas,
 		}
-		c.client.replaceServiceRRset(n, g53.RR_A, a)
+		c.client.replaceServiceRRset(a)
 	}
 }
 
@@ -326,7 +328,7 @@ func (c *Controller) addExternalServiceRecord(svc *corev1.Service) {
 			Ttl:    DefaultTTL,
 			Rdatas: []g53.Rdata{&g53.CName{Name: en}},
 		}
-		c.client.replaceServiceRRset(n, g53.RR_CNAME, cname)
+		c.client.replaceServiceRRset(cname)
 	}
 }
 
@@ -340,7 +342,7 @@ func (c *Controller) addServiceRecord(svc *corev1.Service) {
 		Ttl:    DefaultTTL,
 		Rdatas: []g53.Rdata{rdata},
 	}
-	c.client.replaceServiceRRset(n, g53.RR_A, a)
+	c.client.replaceServiceRRset(a)
 
 	rn, err := util.ReverseIPName(svc.Spec.ClusterIP)
 	if err == nil {
@@ -351,24 +353,24 @@ func (c *Controller) addServiceRecord(svc *corev1.Service) {
 			Ttl:    DefaultTTL,
 			Rdatas: []g53.Rdata{&g53.PTR{Name: n}},
 		}
-		c.client.replaceServiceReverseRRset(rn, g53.RR_PTR, ptr)
+		c.client.replaceServiceReverseRRset(ptr)
 	}
 }
 
 func (c *Controller) deleteServiceRecord(svc *corev1.Service) {
 	n := c.client.getServiceName(svc)
-	c.client.replaceServiceRRset(n, g53.RR_A, nil)
+	c.client.deleteServiceRRset(n, g53.RR_A)
 	if rn, err := util.ReverseIPName(svc.Spec.ClusterIP); err == nil {
-		c.client.replaceServiceReverseRRset(rn, g53.RR_PTR, nil)
+		c.client.deleteServiceReverseRRset(rn)
 	}
 }
 
 func (c *Controller) deleteExternalServiceRecord(svc *corev1.Service) {
 	n := c.client.getServiceName(svc)
-	c.client.replaceServiceRRset(n, g53.RR_CNAME, nil)
+	c.client.deleteServiceRRset(n, g53.RR_CNAME)
 }
 
 func (c *Controller) deleteHeadlessServiceRecord(svc *corev1.Service) {
 	n := c.client.getServiceName(svc)
-	c.client.replaceServiceRRset(n, g53.RR_A, nil)
+	c.client.deleteServiceRRset(n, g53.RR_A)
 }

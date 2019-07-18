@@ -31,13 +31,13 @@ type VgClient struct {
 	serverAddress      string
 }
 
-func New(addr, clustDomain, serviceIPRange, podIPRange, serverAddress string) (*VgClient, error) {
+func NewVgClient(grpcServer, clustDomain, serviceIPRange, podIPRange, serverAddress string) (*VgClient, error) {
 	dialOptions := []grpc.DialOption{
 		grpc.WithInsecure(),
 		grpc.WithTimeout(GRPCConnTimeout),
 	}
 
-	conn, err := grpc.Dial(addr, dialOptions...)
+	conn, err := grpc.Dial(grpcServer, dialOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,7 @@ func New(addr, clustDomain, serviceIPRange, podIPRange, serverAddress string) (*
 		serverAddress:      serverAddress,
 	}
 
-	if err := cli.createZones(); err != nil {
+	if err := cli.initZones(); err != nil {
 		return nil, err
 	}
 
@@ -73,6 +73,11 @@ func New(addr, clustDomain, serviceIPRange, podIPRange, serverAddress string) (*
 
 func (c *VgClient) Close() error {
 	return c.conn.Close()
+}
+
+func (c *VgClient) initZones() error {
+	c.doDeleteZone([]*g53.Name{c.serviceZone, c.serviceReverseZone, c.podReverseZone})
+	return c.createZones()
 }
 
 func (c *VgClient) createZones() error {
@@ -122,33 +127,76 @@ func (c *VgClient) doCreateZone(zoneName *g53.Name, template string, templatePar
 	return err
 }
 
-func (c *VgClient) replaceServiceRRset(name *g53.Name, typ g53.RRType, rrset *g53.RRset) error {
-	return c.replaceRRset(c.serviceZone, name, typ, rrset)
-}
-
-func (c *VgClient) replacePodReverseRRset(name *g53.Name, typ g53.RRType, rrset *g53.RRset) error {
-	return c.replaceRRset(c.podReverseZone, name, typ, rrset)
-}
-
-func (c *VgClient) replaceServiceReverseRRset(name *g53.Name, typ g53.RRType, rrset *g53.RRset) error {
-	return c.replaceRRset(c.serviceReverseZone, name, typ, rrset)
-}
-
-func (c *VgClient) replaceRRset(zone *g53.Name, name *g53.Name, typ g53.RRType, rrset *g53.RRset) error {
-	if rrset != nil {
-		/*
-			up.DeleteRRset(tx, rrset)
-			up.Add(tx, rrset)
-		*/
-	} else {
-		/*
-			up.DeleteRRset(tx, &g53.RRset{
-				Name: name,
-				Type: typ,
-			})
-		*/
+func (c *VgClient) doDeleteZone(zones []*g53.Name) {
+	zoneNames := make([]string, len(zones))
+	for i, z := range zones {
+		zoneNames[i] = z.String(false)
 	}
-	return nil
+
+	c.grpcClient.DeleteZone(context.TODO(), &pb.DeleteZoneRequest{
+		Zones: zoneNames,
+	})
+}
+
+func (c *VgClient) replaceServiceRRset(rrset *g53.RRset) error {
+	return c.replaceRRset(c.serviceZone, rrset)
+}
+
+func (c *VgClient) deleteServiceRRset(name *g53.Name, typ g53.RRType) error {
+	return c.deleteRRset(c.serviceZone, name, typ)
+}
+
+func (c *VgClient) replacePodReverseRRset(rrset *g53.RRset) error {
+	return c.replaceRRset(c.podReverseZone, rrset)
+}
+
+func (c *VgClient) deletePodReverseRRset(name *g53.Name) error {
+	return c.deleteRRset(c.podReverseZone, name, g53.RR_PTR)
+}
+
+func (c *VgClient) replaceServiceReverseRRset(rrset *g53.RRset) error {
+	return c.replaceRRset(c.serviceReverseZone, rrset)
+}
+
+func (c *VgClient) deleteServiceReverseRRset(name *g53.Name) error {
+	return c.deleteRRset(c.serviceReverseZone, name, g53.RR_PTR)
+}
+
+func (c *VgClient) deleteRRset(zone *g53.Name, name *g53.Name, typ g53.RRType) error {
+	_, err := c.grpcClient.DeleteRRset(context.TODO(), &pb.DeleteRRsetRequest{
+		Zone: zone.String(false),
+		Rrsets: []*pb.RRsetHeader{
+			&pb.RRsetHeader{
+				Name: name.String(false),
+				Type: g53RRTypeToPB(typ),
+			},
+		},
+	})
+	return err
+}
+
+func (c *VgClient) replaceRRset(zone *g53.Name, rrset *g53.RRset) error {
+	if err := c.deleteRRset(zone, rrset.Name, rrset.Type); err != nil {
+		return err
+	}
+
+	var rdatas []string
+	for _, rdata := range rrset.Rdatas {
+		rdatas = append(rdatas, rdata.String())
+	}
+
+	_, err := c.grpcClient.AddRRset(context.TODO(), &pb.AddRRsetRequest{
+		Zone: zone.String(false),
+		Rrsets: []*pb.RRset{
+			&pb.RRset{
+				Name:   rrset.Name.String(false),
+				Type:   g53RRTypeToPB(rrset.Type),
+				Ttl:    uint32(rrset.Ttl),
+				Rdatas: rdatas,
+			},
+		},
+	})
+	return err
 }
 
 func (c *VgClient) getServiceName(svc *corev1.Service) *g53.Name {
@@ -168,4 +216,27 @@ func (c *VgClient) getEndpointsAddrName(addr *corev1.EndpointAddress, svc, names
 func (c *VgClient) getPortName(port, protocol, svc, namespace string) *g53.Name {
 	n, _ := g53.NameFromStringUnsafe(strings.Join([]string{"_" + port, "_" + protocol, svc, namespace, "svc"}, ".")).Concat(c.serviceZone)
 	return n
+}
+
+func g53RRTypeToPB(typ g53.RRType) pb.RRType {
+	switch typ {
+	case g53.RR_A:
+		return pb.RRType_A
+	case g53.RR_AAAA:
+		return pb.RRType_AAAA
+	case g53.RR_NS:
+		return pb.RRType_NS
+	case g53.RR_SOA:
+		return pb.RRType_SOA
+	case g53.RR_CNAME:
+		return pb.RRType_CNAME
+	case g53.RR_TXT:
+		return pb.RRType_TXT
+	case g53.RR_SRV:
+		return pb.RRType_SRV
+	case g53.RR_PTR:
+		return pb.RRType_PTR
+	default:
+		panic("unsupported type:" + typ.String())
+	}
 }
