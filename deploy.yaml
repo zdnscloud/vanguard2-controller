@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vanguard2
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRole
+metadata:
+  labels:
+    kubernetes.io/bootstrapping: rbac-defaults
+  name: system:vanguard2
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - endpoints
+  - services
+  - pods
+  - namespaces
+  verbs:
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  annotations:
+    rbac.authorization.kubernetes.io/autoupdate: "true"
+  labels:
+    kubernetes.io/bootstrapping: rbac-defaults
+  name: system:vanguard2
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:vanguard2
+subjects:
+- kind: ServiceAccount
+  name: vanguard2
+  namespace: kube-system
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: vanguard2
+  namespace: kube-system
+  labels:
+    app: user-dns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-dns
+  template:
+    metadata:
+      labels:
+        app: user-dns
+    spec:
+      serviceAccountName: vanguard2
+      containers:
+      - name: vanguard2-controller
+        image: bikecn81/vanguard2-controller:v0.5
+        imagePullPolicy: IfNotPresent
+        command: ["vanguard2-controller"]
+        args: ["-cluster-domain","cluster.local", "-dns-server", "6.6.6.6", "-pod-ip-range", "10.42.0.0/16", "-service-ip-range", "10.43.0.0/16"]
+      - name: vanguard2
+        image: bikecn81/vanguard2:v0.2
+        command: ["/vanguard2"]
+        args: ["--rpc","127.0.0.1:5555"]
+        ports:
+        - containerPort: 53
+          name: dns-port
+          protocol: UDP
+---            
+apiVersion: v1
+kind: Service
+metadata:
+  name: vanguard2
+  namespace: kube-system
+  labels:
+    app: vanguard2
+spec:
+  selector:
+    app: user-dns
+  ports:
+  - port: 5553
+    targetPort: 53
+    protocol: UDP
