@@ -64,7 +64,7 @@ spec:
         command: ["vanguard2-controller"]
         args: ["-cluster-domain","cluster.local", "-dns-server", "6.6.6.6", "-pod-ip-range", "10.42.0.0/16", "-service-ip-range", "10.43.0.0/16"]
       - name: vanguard2
-        image: bikecn81/vanguard2:v0.2
+        image: bikecn81/vanguard2:v0.3
         command: ["/vanguard2"]
         args: ["--rpc","127.0.0.1:5555"]
         ports:
